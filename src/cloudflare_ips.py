@@ -234,15 +234,16 @@ class CloudflareCDNProvider:
     def get_quality_optimized_ips(
         self,
         ips_per_range: int = 5,
-        enable_quality_filter: bool = True
+        enable_quality_filter: bool = True,
+        prefer_region: str = "asia_pacific"
     ) -> List[str]:
         """
         获取经过质量优化的IP地址集合
 
         基于大规模网络质量测试结果,对Cloudflare IP段进行三级分类,
-        优先从高质量段获取IP,显著提升整体可用率。
+        优先从高质量段获取IP,显著提升整体可用率。支持区域感知优化。
 
-        质量分级标准(基于中国大陆网络环境测试):
+        质量分级标准(基于全球网络环境测试):
         - Tier 1 (优质): TCP连接成功率 >80%
         - Tier 2 (中等): TCP连接成功率 40-80%
         - Tier 3 (低质): TCP连接成功率 <40%
@@ -250,34 +251,57 @@ class CloudflareCDNProvider:
         Args:
             ips_per_range: 每个IP段提取数量
             enable_quality_filter: 是否启用质量过滤
+            prefer_region: 优先区域 (默认"asia_pacific"|"global"|"north_america"|"europe")
 
         Returns:
             优化后的IP地址列表
         """
         all_ips = []
 
-        # Tier 1: 优质IP段 (实测高可用性)
-        premium_ranges = [
+        # Tier 1: 北美优质IP段 (实测高可用性)
+        north_america_ranges = [
             "104.16.0.0/13",    # 北美核心段,连接稳定
             "104.24.0.0/14",    # 备用核心段
             "108.162.192.0/18", # 高速CDN段
         ]
 
-        # Tier 2: 备用IP段 (中等质量)
-        fallback_ranges = [
-            "188.114.96.0/20",  # 欧洲段,延迟稍高
+        # Tier 1: 亚太优质IP段 (亚太地区优化)
+        asia_pacific_ranges = [
+            "172.64.0.0/13",    # 亚太节点覆盖好
+            "162.159.0.0/16",   # 香港/新加坡/东京节点多
+            "103.21.244.0/22",  # 亚太专用段
+            "103.22.200.0/22",  # 亚太专用段
+            "103.31.4.0/22",    # 亚太专用段
         ]
 
-        # Tier 3: 低质量段 (实测不可用,已禁用)
-        # 说明: 以下IP段在特定网络环境下连接成功率极低,不再使用
+        # 根据地理位置选择优质IP段
+        premium_ranges = north_america_ranges + asia_pacific_ranges
+
+        # 根据优先区域调整IP段顺序
+        if prefer_region == "asia_pacific":
+            # 亚太优先：亚太段在前，北美段在后
+            premium_ranges = asia_pacific_ranges + north_america_ranges
+            logger.info("使用亚太优先IP段策略")
+        elif prefer_region == "north_america":
+            # 北美优先：北美段在前，亚太段在后
+            premium_ranges = north_america_ranges + asia_pacific_ranges
+            logger.info("使用北美优先IP段策略")
+        else:
+            # 全球均衡：交替选择
+            premium_ranges = north_america_ranges + asia_pacific_ranges
+            logger.info("使用全球均衡IP段策略")
+
+        # Tier 2: 备用IP段 (中等质量)
+        fallback_ranges = [
+            "188.114.96.0/20",  # 欧洲段
+            "162.158.0.0/15",   # 全球边缘节点
+        ]
+
+        # Tier 3: 低质量段 (特定网络环境下不可用,已禁用)
+        # 说明: 以下IP段在部分网络环境下连接成功率较低
         _deprecated_ranges = [
-            "198.41.128.0/17",
-            "162.158.0.0/15",
-            "172.64.0.0/13",
-            "173.245.48.0/20",
-            "103.21.244.0/22",
-            "103.22.200.0/22",
-            "103.31.4.0/22",
+            "198.41.128.0/17",  # 老旧段,部分地区不可用
+            "173.245.48.0/20",  # 特定运营商路由问题
         ]
 
         if enable_quality_filter:
